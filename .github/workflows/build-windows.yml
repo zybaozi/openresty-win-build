@@ -14,7 +14,7 @@ on:
 
 jobs:
   build:
-    runs-on: windows-latest
+    runs-on: windows-2022
     defaults:
       run:
         shell: msys2 {0}
@@ -34,14 +34,18 @@ jobs:
           update: true
           install: >-
             base-devel
-            mingw-w64-x86_64-gcc
-            mingw-w64-x86_64-binutils
+            dos2unix
+            git
             make
+            mercurial
+            patch
             perl
+            unzip
             wget
-            tar
+            curl
             zip
             diffutils
+            mingw-w64-x86_64-toolchain
 
       - name: Check toolchain
         run: |
@@ -50,32 +54,76 @@ jobs:
           make --version | head -1
           perl -v | head -2
 
-      - name: Build
+      # git 仓库里没有 configure，也没有 bundle/。
+      # 必须先跑 mirror-tarballs 把 openresty-<ver>/ 完整源码树拼出来。
+      - name: Assemble source bundle
         run: |
           set -e
           cd src
-          PREFIX=/c/rt/openresty
-          sed -i "s|--prefix=[^ ]*|--prefix=$PREFIX|" util/build-win32.sh
+          bash util/mirror-tarballs
+          echo "=== bundle dir ==="
+          ls -d openresty-*
+          ls openresty-*/configure openresty-*/bundle | head -5
+
+      - name: Build OpenResty
+        run: |
+          set -e
+          cd src
+          VER=$(./util/ver)
+          echo "building OpenResty $VER"
+          cd "openresty-$VER"
+          # 官方脚本里 JOBS=12，按 runner 核数调低
           sed -i "s|^JOBS=.*|JOBS=${{ inputs.jobs }}|" util/build-win32.sh
-          ./util/build-win32.sh
-          echo "=== build done ==="
-          $PREFIX/nginx/sbin/nginx.exe -v
+          # 保持 --prefix= 为空：安装落在构建目录内，产物是相对路径，可绿色分发
+          bash ./util/build-win32.sh
+          echo "=== 产物位置 ==="
+          find . -maxdepth 3 -name nginx.exe -type f
+          ls -d resty lualib conf html 2>/dev/null || true
 
       - name: Package
         run: |
           set -e
-          PREFIX=/c/rt/openresty
-          VER=$(bash src/util/ver)
-          echo "version: $VER"
+          cd src
+          VER=$(./util/ver)
+          cd "openresty-$VER"
+          DIST="openresty-$VER-win64"
+          rm -rf "$DIST"
+          mkdir -p "$DIST"
 
-          # 带上 MinGW 运行时 dll，避免目标机缺库
-          for d in libgcc_s_seh-1.dll libwinpthread-1.dll libstdc++-6.dll; do
-            if [ -f "/mingw64/bin/$d" ]; then cp "/mingw64/bin/$d" "$PREFIX/" || true; fi
+          for f in resty restydoc restydoc-index nginx.exe luajit.exe lua51.dll lua include lualib html conf logs pod COPYRIGHT; do
+            if [ -e "$f" ]; then
+              cp -r "$f" "$DIST/"
+            else
+              echo "WARN: missing $f"
+            fi
           done
 
+          # 兜底：如果 nginx.exe 不在根目录，找出来放进去
+          if [ ! -f "$DIST/nginx.exe" ]; then
+            NX=$(find . -maxdepth 3 -name nginx.exe -type f | head -n1)
+            if [ -n "$NX" ]; then
+              cp "$NX" "$DIST/nginx.exe"
+            fi
+          fi
+
+          # 带上 MinGW 运行时 dll，避免目标机缺库
+          for dll in libgcc_s_seh-1.dll libwinpthread-1.dll libstdc++-6.dll; do
+            if [ -f "/mingw64/bin/$dll" ]; then
+              cp "/mingw64/bin/$dll" "$DIST/"
+            fi
+          done
+
+          if [ -f README-windows.txt ]; then
+            cp README-windows.txt "$DIST/README.txt"
+          fi
+
+          echo "=== 版本自检 ==="
+          "./$DIST/nginx.exe" -v 2>&1 || true
+          echo "=== 包内文件 ==="
+          ls "$DIST"
+
           OUT=$(cygpath -u "$GITHUB_WORKSPACE")
-          cd /c/rt
-          zip -qr "$OUT/openresty-${VER}-win64.zip" openresty
+          zip -qr "$OUT/openresty-$VER-win64.zip" "$DIST"
           ls -lh "$OUT"/openresty-*.zip
 
       - uses: actions/upload-artifact@v4
