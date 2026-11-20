@@ -1,0 +1,223 @@
+name: Build OpenResty (Kylin V10 Server / el8)
+
+# 银河麒麟 V10 Server 底座是 CentOS 8 / RHEL 8 生态，glibc 2.28。
+# 编出来的二进制最高 GLIBC 符号版本必须 <= 2.28，否则拷到麒麟上会报
+# "GLIBC_2.34 not found"。所以这里用 rockylinux:8 容器做编译环境，
+# 绝不能用 ubuntu-latest 裸编（那是 glibc 2.39）。
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'upstream ref: master / v1.31.8.1'
+        required: true
+        default: 'master'
+      arm64:
+        description: '是否同时构建 aarch64（飞腾/鲲鹏）'
+        type: choice
+        options:
+          - 'no'
+          - 'yes'
+        default: 'no'
+
+jobs:
+  build-x86_64:
+    name: Kylin V10 / el8 (x86_64)
+    runs-on: ubuntu-latest
+    container: rockylinux:8
+
+    steps:
+      - name: Install build deps
+        run: |
+          set -e
+          dnf install -y --setopt=install_weak_deps=False \
+            git gcc gcc-c++ make perl perl-core patch tar gzip wget unzip \
+            which findutils binutils procps-ng
+
+          # 可选依赖，缺了用兜底 shim 顶上
+          dnf install -y dos2unix || true
+          dnf install -y perl-XML-Parser perl-XML-Simple || true
+
+          if ! command -v unix2dos >/dev/null 2>&1; then
+            printf '#!/bin/sh\nexit 0\n' > /usr/local/bin/unix2dos
+            chmod +x /usr/local/bin/unix2dos
+            echo "shim: unix2dos"
+          fi
+          if ! command -v pod2text >/dev/null 2>&1; then
+            printf '#!/bin/sh\ncat\n' > /usr/local/bin/pod2text
+            chmod +x /usr/local/bin/pod2text
+            echo "shim: pod2text"
+          fi
+
+          echo "=== 环境自检 ==="
+          ldd --version | head -1
+          gcc --version | head -1
+
+      - name: Checkout upstream
+        uses: actions/checkout@v4
+        with:
+          repository: openresty/openresty
+          ref: ${{ inputs.ref }}
+          path: src
+
+      # git 仓库里没有 configure / bundle/，必须先拼装源码树
+      - name: Assemble source bundle
+        run: |
+          set -e
+          cd src
+          bash util/mirror-tarballs
+          ls -d openresty-*
+
+      - name: Build OpenResty
+        run: |
+          set -e
+          cd src
+          VER=$(./util/ver)
+          echo "building OpenResty $VER"
+          cd "openresty-$VER"
+          ./configure \
+            --prefix=/usr/local/openresty \
+            --with-pcre-jit \
+            --with-stream \
+            --with-stream_ssl_module \
+            --with-stream_ssl_preread_module \
+            --with-http_v2_module \
+            --with-http_stub_status_module \
+            --with-http_realip_module \
+            --with-http_addition_module \
+            --with-http_auth_request_module \
+            --with-http_secure_link_module \
+            --with-http_random_index_module \
+            --with-http_gzip_static_module \
+            --with-http_sub_module \
+            --with-http_dav_module \
+            --with-http_flv_module \
+            --with-http_mp4_module \
+            --with-http_gunzip_module
+          make -j"$(nproc)"
+          # DESTDIR 走暂存目录，编译进去的 prefix 仍是 /usr/local/openresty
+          make install DESTDIR=/tmp/stage
+
+      - name: Verify and package
+        run: |
+          set -e
+          cd src
+          VER=$(./util/ver)
+          BIN=/tmp/stage/usr/local/openresty/nginx/sbin/nginx
+
+          echo "=== nginx -V ==="
+          $BIN -V 2>&1 | tee "/tmp/nginx-V-$VER-x86_64.txt"
+
+          echo "=== 最高 GLIBC 符号版本（必须 <= 2.28）==="
+          objdump -T $BIN | grep -o 'GLIBC_[0-9.]*' | sort -Vu | tail -3
+
+          echo "=== 动态库依赖 ==="
+          ldd $BIN
+
+          mkdir -p out
+          tar czf "out/openresty-${VER}-el8-x86_64.tar.gz" -C /tmp/stage usr/local/openresty
+          cp "/tmp/nginx-V-$VER-x86_64.txt" out/
+
+          echo "=== 包内顶层结构 ==="
+          tar tzf "out/openresty-${VER}-el8-x86_64.tar.gz" | head -8
+          ls -lh out/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openresty-el8-x86_64
+          path: src/out/*
+          retention-days: 30
+
+  build-aarch64:
+    name: Kylin V10 / el8 (aarch64)
+    if: ${{ inputs.arm64 == 'yes' }}
+    runs-on: ubuntu-24.04-arm
+    container: rockylinux:8
+
+    steps:
+      - name: Install build deps
+        run: |
+          set -e
+          dnf install -y --setopt=install_weak_deps=False \
+            git gcc gcc-c++ make perl perl-core patch tar gzip wget unzip \
+            which findutils binutils procps-ng
+          dnf install -y dos2unix || true
+          dnf install -y perl-XML-Parser perl-XML-Simple || true
+          if ! command -v unix2dos >/dev/null 2>&1; then
+            printf '#!/bin/sh\nexit 0\n' > /usr/local/bin/unix2dos
+            chmod +x /usr/local/bin/unix2dos
+          fi
+          if ! command -v pod2text >/dev/null 2>&1; then
+            printf '#!/bin/sh\ncat\n' > /usr/local/bin/pod2text
+            chmod +x /usr/local/bin/pod2text
+          fi
+          echo "=== 环境自检 ==="
+          uname -m
+          ldd --version | head -1
+
+      - name: Checkout upstream
+        uses: actions/checkout@v4
+        with:
+          repository: openresty/openresty
+          ref: ${{ inputs.ref }}
+          path: src
+
+      - name: Assemble source bundle
+        run: |
+          set -e
+          cd src
+          bash util/mirror-tarballs
+          ls -d openresty-*
+
+      - name: Build OpenResty
+        run: |
+          set -e
+          cd src
+          VER=$(./util/ver)
+          echo "building OpenResty $VER"
+          cd "openresty-$VER"
+          ./configure \
+            --prefix=/usr/local/openresty \
+            --with-pcre-jit \
+            --with-stream \
+            --with-stream_ssl_module \
+            --with-stream_ssl_preread_module \
+            --with-http_v2_module \
+            --with-http_stub_status_module \
+            --with-http_realip_module \
+            --with-http_addition_module \
+            --with-http_auth_request_module \
+            --with-http_secure_link_module \
+            --with-http_random_index_module \
+            --with-http_gzip_static_module \
+            --with-http_sub_module \
+            --with-http_dav_module \
+            --with-http_flv_module \
+            --with-http_mp4_module \
+            --with-http_gunzip_module
+          make -j"$(nproc)"
+          make install DESTDIR=/tmp/stage
+
+      - name: Verify and package
+        run: |
+          set -e
+          cd src
+          VER=$(./util/ver)
+          BIN=/tmp/stage/usr/local/openresty/nginx/sbin/nginx
+
+          echo "=== nginx -V ==="
+          $BIN -V 2>&1 | tee "/tmp/nginx-V-$VER-aarch64.txt"
+
+          echo "=== 最高 GLIBC 符号版本（必须 <= 2.28）==="
+          objdump -T $BIN | grep -o 'GLIBC_[0-9.]*' | sort -Vu | tail -3
+
+          mkdir -p out
+          tar czf "out/openresty-${VER}-el8-aarch64.tar.gz" -C /tmp/stage usr/local/openresty
+          cp "/tmp/nginx-V-$VER-aarch64.txt" out/
+          ls -lh out/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openresty-el8-aarch64
+          path: src/out/*
+          retention-days: 30

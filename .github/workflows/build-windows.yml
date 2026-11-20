@@ -1,5 +1,9 @@
 name: Build OpenResty (Windows x64)
 
+# 说明：openresty 的 git 仓库根目录没有 configure，也没有 bundle/。
+# 所以必须先跑 util/mirror-tarballs 把完整源码树拼出来，再进目录编译。
+# 直接 ./util/build-win32.sh 一定会报 ./configure: No such file or directory。
+
 on:
   workflow_dispatch:
     inputs:
@@ -8,12 +12,13 @@ on:
         required: true
         default: 'master'
       jobs:
-        description: 'parallel compile jobs'
+        description: '并行编译数（runner 4 核，建议 4）'
         required: false
         default: '4'
 
 jobs:
   build:
+    name: Windows x64
     runs-on: windows-2022
     defaults:
       run:
@@ -52,18 +57,13 @@ jobs:
           echo "MSYSTEM=$MSYSTEM"
           gcc -dumpmachine
           make --version | head -1
-          perl -v | head -2
 
-      # git 仓库里没有 configure，也没有 bundle/。
-      # 必须先跑 mirror-tarballs 把 openresty-<ver>/ 完整源码树拼出来。
       - name: Assemble source bundle
         run: |
           set -e
           cd src
           bash util/mirror-tarballs
-          echo "=== bundle dir ==="
           ls -d openresty-*
-          ls openresty-*/configure openresty-*/bundle | head -5
 
       - name: Build OpenResty
         run: |
@@ -74,11 +74,10 @@ jobs:
           cd "openresty-$VER"
           # 官方脚本里 JOBS=12，按 runner 核数调低
           sed -i "s|^JOBS=.*|JOBS=${{ inputs.jobs }}|" util/build-win32.sh
-          # 保持 --prefix= 为空：安装落在构建目录内，产物是相对路径，可绿色分发
+          # 保持 --prefix= 为空：安装落在构建目录内，路径全相对，产物可绿色分发
           bash ./util/build-win32.sh
-          echo "=== 产物位置 ==="
+          echo "=== nginx.exe ==="
           find . -maxdepth 3 -name nginx.exe -type f
-          ls -d resty lualib conf html 2>/dev/null || true
 
       - name: Package
         run: |
@@ -98,7 +97,6 @@ jobs:
             fi
           done
 
-          # 兜底：如果 nginx.exe 不在根目录，找出来放进去
           if [ ! -f "$DIST/nginx.exe" ]; then
             NX=$(find . -maxdepth 3 -name nginx.exe -type f | head -n1)
             if [ -n "$NX" ]; then
