@@ -1,0 +1,85 @@
+name: Build OpenResty (Windows x64)
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'upstream ref: master / v1.31.8.1'
+        required: true
+        default: 'master'
+      jobs:
+        description: 'parallel compile jobs'
+        required: false
+        default: '4'
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    steps:
+      - name: Checkout upstream
+        uses: actions/checkout@v4
+        with:
+          repository: openresty/openresty
+          ref: ${{ inputs.ref }}
+          path: src
+
+      - name: Setup MSYS2 (MINGW64)
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            base-devel
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-binutils
+            make
+            perl
+            wget
+            tar
+            zip
+            diffutils
+
+      - name: Check toolchain
+        run: |
+          echo "MSYSTEM=$MSYSTEM"
+          gcc -dumpmachine
+          make --version | head -1
+          perl -v | head -2
+
+      - name: Build
+        run: |
+          set -e
+          cd src
+          PREFIX=/c/rt/openresty
+          sed -i "s|--prefix=[^ ]*|--prefix=$PREFIX|" util/build-win32.sh
+          sed -i "s|^JOBS=.*|JOBS=${{ inputs.jobs }}|" util/build-win32.sh
+          ./util/build-win32.sh
+          echo "=== build done ==="
+          $PREFIX/nginx/sbin/nginx.exe -v
+
+      - name: Package
+        run: |
+          set -e
+          PREFIX=/c/rt/openresty
+          VER=$(bash src/util/ver)
+          echo "version: $VER"
+
+          # 带上 MinGW 运行时 dll，避免目标机缺库
+          for d in libgcc_s_seh-1.dll libwinpthread-1.dll libstdc++-6.dll; do
+            if [ -f "/mingw64/bin/$d" ]; then cp "/mingw64/bin/$d" "$PREFIX/" || true; fi
+          done
+
+          OUT=$(cygpath -u "$GITHUB_WORKSPACE")
+          cd /c/rt
+          zip -qr "$OUT/openresty-${VER}-win64.zip" openresty
+          ls -lh "$OUT"/openresty-*.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openresty-win64
+          path: openresty-*-win64.zip
+          retention-days: 30
