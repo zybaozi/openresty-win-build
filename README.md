@@ -116,6 +116,7 @@ objdump -T nginx | grep -o 'GLIBC_[0-9.]*' | sort -Vu | tail -3
 
 ## 可能踩的坑
 
+- **`nothing provides libgcc >= 8.5.0-31.el8_10 needed by gcc-...`**：Rocky 8 镜像源的 BaseOS / AppStream 版本错位（AppStream 已发新 gcc，BaseOS 的 libgcc 还没同步）。workflow 里已加 `dnf clean all` + `--refresh --nobest` 三次重试，并会把 `libgcc/libstdc++/libgomp` 拉到仓库最新；绝大概率自动过去。若三次都失败，重跑一次 workflow（换到另一个镜像节点）即可。
 - **`the HTTP rewrite module requires the PCRE library`**：说明 `--with-pcre=` 指向的源码目录不对。正常由 `Fetch static lib sources` 步骤把 pcre2 下到 `/tmp/deps/pcre2-10.49`，若那步的 wget 失败（GitHub 抽风），重跑即可。
 - **`mirror-tarballs` 卡在 `git clone nginx.org`**：网络问题，重跑。只影响 `restydoc` 文档索引，不影响编译。
 - **某个组件 `get-tarball` 404**：master 引用了还没发布的 rc 版本，日志会写明组件名；先跑 `v1.31.8.1` 验证流程本身没问题。

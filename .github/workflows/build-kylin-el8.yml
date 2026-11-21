@@ -30,10 +30,37 @@ jobs:
       - name: Install build deps
         run: |
           set -e
-          dnf install -y --setopt=install_weak_deps=False \
-            git gcc gcc-c++ make perl perl-core patch tar gzip wget unzip \
-            which findutils binutils procps-ng \
-            pcre2-devel pcre-devel zlib-devel openssl-devel
+
+          PKGS="git gcc gcc-c++ make perl perl-core patch tar gzip wget unzip \
+                which findutils binutils procps-ng \
+                pcre2-devel pcre-devel zlib-devel openssl-devel"
+
+          # Rocky 8 的 BaseOS / AppStream 镜像偶尔不同步：AppStream 已发
+          # gcc-8.5.0-31.el8_10，BaseOS 的 libgcc 还停在旧版，于是报
+          #   nothing provides libgcc >= 8.5.0-31.el8_10
+          # 这是源的问题，不是环境的问题。清缓存换镜像节点 + --nobest 重试即可。
+          ok=0
+          for attempt in 1 2 3; do
+            echo ">>> 第 $attempt 次尝试安装编译依赖"
+            dnf clean all >/dev/null 2>&1 || true
+            if dnf install -y --refresh --nobest --allowerasing \
+                 --setopt=install_weak_deps=False --setopt=retries=5 $PKGS; then
+              ok=1
+              break
+            fi
+            echo ">>> 安装失败，尝试把 libgcc / libstdc++ / libgomp 升到仓库最新再重试"
+            dnf upgrade -y --refresh libgcc libstdc++ libgomp || true
+            sleep 10
+          done
+
+          if [ "$ok" != "1" ]; then
+            echo "ERROR: 编译依赖安装失败（Rocky 8 镜像源版本错位），重跑一次 workflow 即可"
+            exit 1
+          fi
+
+          for c in gcc make perl wget patch objdump; do
+            command -v "$c" >/dev/null 2>&1 || { echo "ERROR: 缺少 $c"; exit 1; }
+          done
 
           # 可选依赖，缺了用兜底 shim 顶上
           dnf install -y dos2unix || true
@@ -189,10 +216,34 @@ jobs:
       - name: Install build deps
         run: |
           set -e
-          dnf install -y --setopt=install_weak_deps=False \
-            git gcc gcc-c++ make perl perl-core patch tar gzip wget unzip \
-            which findutils binutils procps-ng \
-            pcre2-devel pcre-devel zlib-devel openssl-devel
+
+          PKGS="git gcc gcc-c++ make perl perl-core patch tar gzip wget unzip \
+                which findutils binutils procps-ng \
+                pcre2-devel pcre-devel zlib-devel openssl-devel"
+
+          ok=0
+          for attempt in 1 2 3; do
+            echo ">>> 第 $attempt 次尝试安装编译依赖"
+            dnf clean all >/dev/null 2>&1 || true
+            if dnf install -y --refresh --nobest --allowerasing \
+                 --setopt=install_weak_deps=False --setopt=retries=5 $PKGS; then
+              ok=1
+              break
+            fi
+            echo ">>> 安装失败，尝试把 libgcc / libstdc++ / libgomp 升到仓库最新再重试"
+            dnf upgrade -y --refresh libgcc libstdc++ libgomp || true
+            sleep 10
+          done
+
+          if [ "$ok" != "1" ]; then
+            echo "ERROR: 编译依赖安装失败（Rocky 8 镜像源版本错位），重跑一次 workflow 即可"
+            exit 1
+          fi
+
+          for c in gcc make perl wget patch objdump; do
+            command -v "$c" >/dev/null 2>&1 || { echo "ERROR: 缺少 $c"; exit 1; }
+          done
+
           dnf install -y dos2unix || true
           dnf install -y perl-XML-Parser perl-XML-Simple || true
           if ! command -v unix2dos >/dev/null 2>&1; then
@@ -308,9 +359,6 @@ jobs:
 
           echo "=== 目标机必须具备的系统库 ==="
           ldd $BIN | grep -v "$PREFIX_ROOT" || true
-
-          echo "=== 目标机必须具备的系统库 ==="
-          ldd $BIN | grep -v '/usr/local/openresty' || true
 
           mkdir -p out
           tar czf "out/openresty-${VER}-el8-aarch64.tar.gz" -C /tmp/stage usr/local/openresty
