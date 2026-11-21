@@ -96,7 +96,10 @@ openssl 特意保持动态：等保、安全更新、以后做国密改造都得
 ldd /usr/local/openresty/nginx/sbin/nginx
 ```
 
-workflow 里有断言，一旦 pcre2/zlib 退回动态链接会直接 fail，不会给你一个带隐患的包。
+workflow 里有断言（查的是二进制自身的 `DT_NEEDED`，不是 `ldd` 的传递依赖），一旦 pcre2/zlib 退回动态链接会直接 fail，不会给你一个带隐患的包。
+
+**关于 `libluajit-5.1.so.2`**：它是动态库，但装在 prefix 内部（`/usr/local/openresty/luajit/lib/`），二进制里内嵌了指向该绝对路径的 rpath，只要按 `/usr/local/openresty` 解压就能找到。
+在构建机的 `/tmp/stage` 暂存目录里直接执行会报 `cannot open shared object file`，那是路径还没生效，**不是缺陷**——workflow 里用 `LD_LIBRARY_PATH` 补上了，日志里不会再有这个报错。
 
 ## 为什么用 rockylinux:8 容器
 
