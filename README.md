@@ -81,19 +81,22 @@ Artifacts 里还附了 `nginx-V-<ver>-x86_64.txt`，就是本次编译的 `nginx
 
 ### 目标机依赖
 
-Linux 版 OpenResty **用系统库编译**（不像 Windows 那样把 pcre/openssl/zlib 一起编进去），所以二进制依赖：
+**pcre2 和 zlib 已经静态编译进二进制**（configure 时用 `--with-pcre=` / `--with-zlib=` 指向源码目录），产物只动态依赖：
 
 ```
-libpcre2-8.so.0   libssl.so.1.1   libcrypto.so.1.1   libz.so.1
+libc.so.6  libpthread  libdl  libm      → glibc 2.28，麒麟自带
+libssl.so.1.1  libcrypto.so.1.1         → 系统 openssl 1.1.1，麒麟 V10 自带
 ```
 
-麒麟 V10 底座是 el8，这几个都自带。拷过去先确认一下：
+openssl 特意保持动态：等保、安全更新、以后做国密改造都得跟着系统库走，编死反而被动。
+
+部署前确认一下：
 
 ```bash
-ldd /usr/local/openresty/nginx/sbin/nginx | grep -v openresty
+ldd /usr/local/openresty/nginx/sbin/nginx
 ```
 
-workflow 的构建日志里也会打印这段（`=== 目标机必须具备的系统库 ===`），部署前对一眼。缺 pcre2 就 `dnf install -y pcre2`。
+workflow 里有断言，一旦 pcre2/zlib 退回动态链接会直接 fail，不会给你一个带隐患的包。
 
 ## 为什么用 rockylinux:8 容器
 
@@ -110,7 +113,7 @@ objdump -T nginx | grep -o 'GLIBC_[0-9.]*' | sort -Vu | tail -3
 
 ## 可能踩的坑
 
-- **`the HTTP rewrite module requires the PCRE library`**：编译环境缺 PCRE 开发库。Linux 版 OpenResty 用系统库，必须装 `pcre2-devel pcre-devel zlib-devel openssl-devel`（已在 workflow 的 dnf 清单里）。
+- **`the HTTP rewrite module requires the PCRE library`**：说明 `--with-pcre=` 指向的源码目录不对。正常由 `Fetch static lib sources` 步骤把 pcre2 下到 `/tmp/deps/pcre2-10.49`，若那步的 wget 失败（GitHub 抽风），重跑即可。
 - **`mirror-tarballs` 卡在 `git clone nginx.org`**：网络问题，重跑。只影响 `restydoc` 文档索引，不影响编译。
 - **某个组件 `get-tarball` 404**：master 引用了还没发布的 rc 版本，日志会写明组件名；先跑 `v1.31.8.1` 验证流程本身没问题。
 - **`unix2dos` / `pod2text` 缺失**：workflow 里已放兜底 shim，不会中断构建。
