@@ -32,7 +32,8 @@ jobs:
           set -e
           dnf install -y --setopt=install_weak_deps=False \
             git gcc gcc-c++ make perl perl-core patch tar gzip wget unzip \
-            which findutils binutils procps-ng
+            which findutils binutils procps-ng \
+            pcre2-devel pcre-devel zlib-devel openssl-devel
 
           # 可选依赖，缺了用兜底 shim 顶上
           dnf install -y dos2unix || true
@@ -52,6 +53,11 @@ jobs:
           echo "=== 环境自检 ==="
           ldd --version | head -1
           gcc --version | head -1
+
+          # Linux 版 OpenResty 用系统库，缺 pcre2-devel 就会在 configure 阶段报
+          # "the HTTP rewrite module requires the PCRE library"
+          echo "=== 依赖自检 ==="
+          ls -l /usr/include/pcre2.h /usr/include/openssl/ssl.h /usr/include/zlib.h
 
       - name: Checkout upstream
         uses: actions/checkout@v4
@@ -111,8 +117,11 @@ jobs:
           echo "=== 最高 GLIBC 符号版本（必须 <= 2.28）==="
           objdump -T $BIN | grep -o 'GLIBC_[0-9.]*' | sort -Vu | tail -3
 
-          echo "=== 动态库依赖 ==="
+          echo "=== 动态库依赖（完整）==="
           ldd $BIN
+
+          echo "=== 目标机必须具备的系统库（麒麟 V10 自带）==="
+          ldd $BIN | grep -v '/usr/local/openresty' || true
 
           mkdir -p out
           tar czf "out/openresty-${VER}-el8-x86_64.tar.gz" -C /tmp/stage usr/local/openresty
@@ -140,7 +149,8 @@ jobs:
           set -e
           dnf install -y --setopt=install_weak_deps=False \
             git gcc gcc-c++ make perl perl-core patch tar gzip wget unzip \
-            which findutils binutils procps-ng
+            which findutils binutils procps-ng \
+            pcre2-devel pcre-devel zlib-devel openssl-devel
           dnf install -y dos2unix || true
           dnf install -y perl-XML-Parser perl-XML-Simple || true
           if ! command -v unix2dos >/dev/null 2>&1; then
@@ -154,6 +164,7 @@ jobs:
           echo "=== 环境自检 ==="
           uname -m
           ldd --version | head -1
+          ls -l /usr/include/pcre2.h /usr/include/openssl/ssl.h /usr/include/zlib.h
 
       - name: Checkout upstream
         uses: actions/checkout@v4
@@ -210,6 +221,9 @@ jobs:
 
           echo "=== 最高 GLIBC 符号版本（必须 <= 2.28）==="
           objdump -T $BIN | grep -o 'GLIBC_[0-9.]*' | sort -Vu | tail -3
+
+          echo "=== 目标机必须具备的系统库 ==="
+          ldd $BIN | grep -v '/usr/local/openresty' || true
 
           mkdir -p out
           tar czf "out/openresty-${VER}-el8-aarch64.tar.gz" -C /tmp/stage usr/local/openresty

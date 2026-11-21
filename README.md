@@ -79,6 +79,22 @@ systemctl start openresty
 
 Artifacts 里还附了 `nginx-V-<ver>-x86_64.txt`，就是本次编译的 `nginx -V` 参数清单。
 
+### 目标机依赖
+
+Linux 版 OpenResty **用系统库编译**（不像 Windows 那样把 pcre/openssl/zlib 一起编进去），所以二进制依赖：
+
+```
+libpcre2-8.so.0   libssl.so.1.1   libcrypto.so.1.1   libz.so.1
+```
+
+麒麟 V10 底座是 el8，这几个都自带。拷过去先确认一下：
+
+```bash
+ldd /usr/local/openresty/nginx/sbin/nginx | grep -v openresty
+```
+
+workflow 的构建日志里也会打印这段（`=== 目标机必须具备的系统库 ===`），部署前对一眼。缺 pcre2 就 `dnf install -y pcre2`。
+
 ## 为什么用 rockylinux:8 容器
 
 银河麒麟 V10（SP1/SP2/SP3）底座是 CentOS 8 / RHEL 8 生态，**glibc 2.28**。
@@ -94,6 +110,7 @@ objdump -T nginx | grep -o 'GLIBC_[0-9.]*' | sort -Vu | tail -3
 
 ## 可能踩的坑
 
+- **`the HTTP rewrite module requires the PCRE library`**：编译环境缺 PCRE 开发库。Linux 版 OpenResty 用系统库，必须装 `pcre2-devel pcre-devel zlib-devel openssl-devel`（已在 workflow 的 dnf 清单里）。
 - **`mirror-tarballs` 卡在 `git clone nginx.org`**：网络问题，重跑。只影响 `restydoc` 文档索引，不影响编译。
 - **某个组件 `get-tarball` 404**：master 引用了还没发布的 rc 版本，日志会写明组件名；先跑 `v1.31.8.1` 验证流程本身没问题。
 - **`unix2dos` / `pod2text` 缺失**：workflow 里已放兜底 shim，不会中断构建。
